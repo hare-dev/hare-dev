@@ -1,6 +1,6 @@
 - 👋 Hi, I’m Patryk Zając
 - 👀 I’m interested in Java technologies
-- 🌱 I’m currently learning Java, Spring Boot framework, MongoDB database and Microservices methodologies 
+- 🌱 I’m currently learning Java, Spring Boot framework, MySQL database and Microservices methodologies 
 - 📫 How to reach me: patrykzajac.it@gmail.com
 
 <!---

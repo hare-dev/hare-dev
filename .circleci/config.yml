@@ -1,0 +1,153 @@
+version: 2.1
+orbs:
+  slack: circleci/slack@4.9.3
+jobs:
+  build_tests:
+    docker:
+      - image: cimg/openjdk:17.0
+    working_directory: ~/library-web-application
+    steps:
+      - checkout
+      - run:
+          name: Java Version
+          command: java --version
+
+      - run:
+          name: Test
+          command: mvn test
+
+  build_application:
+    docker:
+      - image: cimg/openjdk:17.0
+    working_directory: ~/library-web-application
+    steps:
+      - checkout
+      - restore_cache:
+          name: Restore build application cache
+          keys:
+            - library-web-application-{{ checksum "pom.xml" }}
+      - run: mvn dependency:go-offline
+
+      - save_cache:
+          name: Build application cache
+          key: library-web-application-{{ checksum "pom.xml" }}
+          paths:
+            - ~/.m2
+
+      - run:
+          name: Java Version
+          command: java --version
+
+      - run:
+          name: Build Application Jar
+          command: mvn -B clean package
+
+      - store_artifacts:
+          path: tmp/application
+          destination: library-web-application
+
+  generate_code_climate_report:
+    environment:
+      CC_TEST_REPORTER_ID: aa7bd13a1ed950ae67eb4b5dffa66fde0274424b13c2dd4e4391326c37d87096
+    docker:
+      - image: cimg/openjdk:17.0
+    working_directory: ~/library-web-application
+    steps:
+      - checkout
+      - run:
+          name: Run Java tests for report
+          command: mvn test
+
+      - run:
+          name: Setup Code Climate test-reporter
+          command: |
+            curl -L https://codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64 > ./cc-test-reporter
+            chmod +x ./cc-test-reporter
+            ./cc-test-reporter before-build
+          when: always
+
+      - run:
+          name: Generate JaCoCo report
+          command: ./cc-test-reporter format-coverage -d -t jacoco ./target/jacoco-report/jacoco.xml
+
+      - store_artifacts:
+          path: tmp/jacoco-report
+          destination: jacoco-report
+
+      - run:
+          name: Upload JaCoCo report to CodeClimate
+          command: ./cc-test-reporter upload-coverage -d
+
+      - store_artifacts:
+          path: tmp/coverage
+          destination: coverage-report
+
+  build_and_push_docker_image:
+    docker:
+      - image: docker:stable
+    environment:
+      DOCKER_COMPOSE_VERSION: 'v2.5.0'
+    steps:
+      - checkout
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - run:
+          name: Install Docker Compose
+          command: |
+            apk update && apk upgrade && apk add curl  
+            curl -L "https://github.com/docker/compose/releases/download/$DOCKER_COMPOSE_VERSION/docker-compose-linux-x86_64" -o ~/docker-compose  
+            chmod +x ~/docker-compose  
+            mv ~/docker-compose /usr/local/bin/docker-compose
+      - run:
+          name: Login to DockerHub
+          command: docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD
+      - run:
+          name: Build images of services declared in docker-compose.yml
+          command: docker-compose build
+      - run:
+          name: Build tag for image
+          command:
+            docker tag $DOCKER_IMAGE_NAME:latest $DOCKER_IMAGE_NAME:$CIRCLE_BUILD_NUM
+      - run:
+          name: Push image to Dockerhub
+          command:
+            docker push $DOCKER_IMAGE_NAME:$CIRCLE_BUILD_NUM
+
+  send_notifications:
+    docker:
+      - image: 'cimg/base:stable'
+    steps:
+      - slack/notify:
+          event: pass
+          template: basic_success_1
+      - slack/notify:
+          event: fail
+          template: basic_fail_1
+      - slack/notify:
+          event: pass
+          template: success_tagged_deploy_1
+
+workflows:
+  library-web-application:
+    jobs:
+      - build_tests:
+          filters:
+            branches:
+              ignore:
+                - develop
+      - build_application:
+          requires:
+            - build_tests
+
+      - generate_code_climate_report:
+          requires:
+            - build_application
+
+      - build_and_push_docker_image:
+          requires:
+            - generate_code_climate_report
+
+      - send_notifications:
+          context: slack-secrets
+          requires:
+            - build_and_push_docker_image
